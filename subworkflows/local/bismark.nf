@@ -9,13 +9,15 @@ include { BISMARK_METHYLATIONEXTRACTOR                } from '../../modules/nf-c
 include { BISMARK_COVERAGE2CYTOSINE                   } from '../../modules/nf-core/bismark/coverage2cytosine/main'
 include { BISMARK_REPORT                              } from '../../modules/nf-core/bismark/report/main'
 include { BISMARK_SUMMARY                             } from '../../modules/nf-core/bismark/summary/main'
-
+include { UMITOOLS_DEDUP                              } from '../../modules/local/umitools_dedup'
+include { SAMTOOLS_INDEX                              } from '../../modules/nf-core/samtools/index/main'
 workflow BISMARK {
     take:
     reads              // channel: [ val(meta), [ reads ] ]
     bismark_index      // channel: /path/to/BismarkIndex/
     skip_deduplication // boolean: whether to deduplicate alignments
     cytosine_report    // boolean: whether the run coverage2cytosine
+    with_umi           // whether to run umitool dedub
 
     main:
     versions = Channel.empty()
@@ -45,11 +47,30 @@ workflow BISMARK {
         /*
         * Run deduplicate_bismark
         */
+
+        if(!with_umi)
+        {
         BISMARK_DEDUPLICATE( BISMARK_ALIGN.out.bam )
 
         alignments = BISMARK_DEDUPLICATE.out.bam
         alignment_reports = BISMARK_ALIGN.out.report.join(BISMARK_DEDUPLICATE.out.report)
         versions = versions.mix(BISMARK_DEDUPLICATE.out.versions)
+        }else{
+
+
+        SAMTOOLS_INDEX(SAMTOOLS_SORT_ALIGNED.out.bam)
+
+        ch_bam_bai = SAMTOOLS_SORT_ALIGNED.out.bam
+        .join(SAMTOOLS_INDEX.out.bai, by: [0], remainder: true).view()
+
+        UMITOOLS_DEDUP( ch_bam_bai ,false)
+
+        alignments = UMITOOLS_DEDUP.out.bam
+        alignment_reports = BISMARK_ALIGN.out.report.map{ meta, report -> [ meta, report, [] ] }
+        versions = versions.mix(UMITOOLS_DEDUP.out.versions.first())
+
+        }
+
     }
 
     /*

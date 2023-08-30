@@ -10,6 +10,7 @@ include { PICARD_MARKDUPLICATES                         } from '../../modules/nf
 include { BWAMETH_ALIGN                                 } from '../../modules/nf-core/bwameth/align/main'
 include { METHYLDACKEL_EXTRACT                          } from '../../modules/nf-core/methyldackel/extract/main'
 include { METHYLDACKEL_MBIAS                            } from '../../modules/nf-core/methyldackel/mbias/main'
+include { UMITOOLS_DEDUP                             } from '../../modules/local/umitools_dedup'
 
 workflow BWAMETH {
     take:
@@ -18,6 +19,7 @@ workflow BWAMETH {
     fasta               // channel: /path/to/genome.fa
     fasta_index         // channel: /path/to/genome.fa.fai
     skip_deduplication  // boolean: whether to deduplicate alignments
+    with_umi           // whether to run umitool dedub
 
     main:
     versions = Channel.empty()
@@ -57,6 +59,10 @@ workflow BWAMETH {
         picard_metrics = Channel.empty()
         picard_version = Channel.empty()
     } else {
+
+
+        if(!with_umi)
+        {
         /*
         * Run Picard MarkDuplicates
         */
@@ -75,6 +81,14 @@ workflow BWAMETH {
         picard_metrics = PICARD_MARKDUPLICATES.out.metrics
         picard_version = PICARD_MARKDUPLICATES.out.versions
         versions = versions.mix(PICARD_MARKDUPLICATES.out.versions)
+        }else{
+
+        UMITOOLS_DEDUP( SAMTOOLS_SORT.out.bam,false)
+
+        alignments = UMITOOLS_DEDUP.out.bam
+        versions = versions.mix(UMITOOLS_DEDUP.out.versions.first())
+
+        }
     }
 
 

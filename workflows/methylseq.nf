@@ -43,6 +43,11 @@ ch_multiqc_custom_methods_description = params.multiqc_methods_description ? fil
     IMPORT LOCAL MODULES/SUBWORKFLOWS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
+//
+// modules: Consisting of a mix of local and nf-core/modules
+//
+include { UMITOOLS_EXTRACT } from '../modules/local/umitools_extract.nf'
+include { TRIM_DIVERSITY } from '../modules/local/trim_diversity.nf'
 
 //
 // SUBWORKFLOWS: Consisting of a mix of local and nf-core/modules
@@ -100,15 +105,21 @@ workflow METHYLSEQ {
     //
     INPUT_CHECK (
         ch_input
-    )
-    .reads
+    ).reads.map{
+        if(it[0].has_umi)
+        {
+            [ it[0], it[1] ]
+        }else{
+            [ it[0], it[1] ]
+        }
+
+    }
     .map {
         meta, fastq ->
             def meta_clone = meta.clone()
             meta_clone.id = meta_clone.id.split('_')[0..-2].join('_')
             [ meta_clone, fastq ]
-    }
-    .groupTuple(by: [0])
+    }.groupTuple(by: [0])
     .branch {
         meta, fastq ->
             single: fastq.size() == 1
@@ -117,11 +128,49 @@ workflow METHYLSEQ {
                 return [ meta, fastq.flatten() ]
     }
     .set { ch_fastq }
+
+
+
+
+if (params.with_umi && !params.skip_umi_extract) {
+
+ INPUT_CHECK.out.reads.branch{
+            has_umi: it[0].has_umi
+                return [ it[0], it[1],it[2] ]
+            has_no_umi: !it[0].has_umi
+                return [ it[0], it[1] ]
+    }
+    .set { ch_fastq_umi }
+
+
+UMITOOLS_EXTRACT(ch_fastq_umi.has_umi).reads.mix(ch_fastq_umi.has_no_umi)
+      .map {
+        meta, fastq ->
+            def meta_clone = meta.clone()
+            meta_clone.id = meta_clone.id.split('_')[0..-2].join('_')
+            [ meta_clone, fastq ]
+    }.groupTuple(by: [0])
+    .branch {
+        meta, fastq ->
+            single: fastq.size() == 1
+                return [ meta, fastq.flatten() ]
+            multiple: fastq.size() > 1
+                return [ meta, fastq.flatten() ]
+    }
+    .set { ch_fastq }
+
+ch_versions = ch_versions.mix(UMITOOLS_EXTRACT.out.versions.first())
+}
+
+
+
+
     ch_versions = ch_versions.mix(INPUT_CHECK.out.versions)
 
     //
     // MODULE: Concatenate FastQ files from same sample if required
     //
+    ch_fastq.multiple.view()
     CAT_FASTQ (
         ch_fastq.multiple
     )
@@ -138,6 +187,8 @@ workflow METHYLSEQ {
     )
     ch_versions = ch_versions.mix(FASTQC.out.versions.first())
 
+
+
     /*
      * MODULE: Run TrimGalore!
      */
@@ -149,6 +200,15 @@ workflow METHYLSEQ {
         reads = ch_cat_fastq
     }
 
+
+        /*
+     * MODULE: Run TrimGalore!
+     */
+    if (params.diversity_trimming) {
+        TRIM_DIVERSITY(reads)
+        reads = TRIM_DIVERSITY.out.reads
+        ch_versions = ch_versions.mix(TRIM_DIVERSITY.out.versions.first())
+    }
 
 
     /*
@@ -164,8 +224,9 @@ workflow METHYLSEQ {
         BISMARK (
             reads,
             PREPARE_GENOME.out.bismark_index,
-            params.skip_deduplication || params.rrbs,
-            params.cytosine_report || params.nomeseq
+            params.skip_deduplication || params.rrbs && !(params.with_umi && !params.skip_umi_extract),
+            params.cytosine_report || params.nomeseq,
+            params.with_umi && !params.skip_umi_extract
         )
         ch_versions = ch_versions.mix(BISMARK.out.versions.unique{ it.baseName })
         ch_bam = BISMARK.out.bam
@@ -180,7 +241,8 @@ workflow METHYLSEQ {
             PREPARE_GENOME.out.bwameth_index,
             PREPARE_GENOME.out.fasta,
             PREPARE_GENOME.out.fasta_index,
-            params.skip_deduplication || params.rrbs,
+            params.skip_deduplication || params.rrbs && !(params.with_umi && !params.skip_umi_extract),
+            params.with_umi && !params.skip_umi_extract
         )
         ch_versions = ch_versions.mix(BWAMETH.out.versions.unique{ it.baseName })
         ch_bam = BWAMETH.out.bam
@@ -240,7 +302,7 @@ workflow METHYLSEQ {
         multiqc_report = MULTIQC.out.report.toList()
         ch_versions    = ch_versions.mix(MULTIQC.out.versions)
     }
-}
+ }
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

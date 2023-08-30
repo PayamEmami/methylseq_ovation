@@ -35,6 +35,8 @@ class RowChecker:
         first_col="fastq_1",
         second_col="fastq_2",
         single_col="single_end",
+        third_col="fastq_umi",
+        triple_col="has_umi",
         **kwargs,
     ):
         """
@@ -57,6 +59,8 @@ class RowChecker:
         self._first_col = first_col
         self._second_col = second_col
         self._single_col = single_col
+        self._third_col = third_col
+        self._triple_col = triple_col
         self._seen = set()
         self.modified = []
 
@@ -72,6 +76,7 @@ class RowChecker:
         self._validate_sample(row)
         self._validate_first(row)
         self._validate_second(row)
+        self._validate_third(row)
         self._validate_pair(row)
         self._seen.add((row[self._sample_col], row[self._first_col]))
         self.modified.append(row)
@@ -82,6 +87,7 @@ class RowChecker:
             raise AssertionError("Sample input is required.")
         # Sanitize samples slightly.
         row[self._sample_col] = row[self._sample_col].replace(" ", "_")
+
 
     def _validate_first(self, row):
         """Assert that the first FASTQ entry is non-empty and has the right format."""
@@ -94,6 +100,11 @@ class RowChecker:
         if len(row[self._second_col]) > 0:
             self._validate_fastq_format(row[self._second_col])
 
+    def _validate_third(self, row):
+        """Assert that the second FASTQ entry has the right format if it exists."""
+        if len(row[self._third_col]) > 0:
+            self._validate_fastq_format(row[self._third_col])
+
     def _validate_pair(self, row):
         """Assert that read pairs have the same file extension. Report pair status."""
         if row[self._first_col] and row[self._second_col]:
@@ -102,8 +113,21 @@ class RowChecker:
             second_col_suffix = Path(row[self._second_col]).suffixes[-2:]
             if first_col_suffix != second_col_suffix:
                 raise AssertionError("FASTQ pairs must have the same file extensions.")
+            if row[self._third_col]:
+                third_col_suffix = Path(row[self._third_col]).suffixes[-2:]
+                if first_col_suffix != third_col_suffix:
+                    raise AssertionError("FASTQ pairs must have the same file extensions.")
+                row[self._triple_col] = True
+
         else:
             row[self._single_col] = True
+            first_col_suffix = Path(row[self._first_col]).suffixes[-2:]
+            if row[self._third_col]:
+                third_col_suffix = Path(row[self._third_col]).suffixes[-2:]
+                if first_col_suffix != third_col_suffix:
+                    raise AssertionError("FASTQ pairs must have the same file extensions.")
+                row[self._triple_col] = True
+
 
     def _validate_fastq_format(self, filename):
         """Assert that a given filename has one of the expected FASTQ extensions."""
@@ -188,7 +212,7 @@ def check_samplesheet(file_in, file_out):
         https://raw.githubusercontent.com/nf-core/test-datasets/viralrecon/samplesheet/samplesheet_test_illumina_amplicon.csv
 
     """
-    required_columns = {"sample", "fastq_1", "fastq_2"}
+    required_columns = {"sample", "fastq_1", "fastq_2","fastq_umi"}
     # See https://docs.python.org/3.9/library/csv.html#id3 to read up on `newline=""`.
     with file_in.open(newline="") as in_handle:
         dialect = sniff_format(in_handle)
@@ -212,6 +236,7 @@ def check_samplesheet(file_in, file_out):
         checker.validate_unique_samples()
     header = list(reader.fieldnames)
     header.insert(1, "single_end")
+    header.insert(2, "has_umi")
     # See https://docs.python.org/3.9/library/csv.html#id3 to read up on `newline=""`.
     with file_out.open(mode="w", newline="") as out_handle:
         writer = csv.DictWriter(out_handle, header, delimiter=",")
